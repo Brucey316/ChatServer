@@ -4,6 +4,16 @@ from Cryptodome.Cipher import PKCS1_OAEP, AES
 from Cryptodome.Random import get_random_bytes
 import getpass
 
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m' #yellow
+    FAIL = '\033[91m' #red
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 """
     Class Config
     ============
@@ -16,6 +26,12 @@ class Config():
         with open(".config", "r") as config:
             self.dir = config.readline().split("=")[1].strip()
             self.keychain = config.readline().split("=")[1].strip()
+            self.priv = config.readline().split("=")[1].strip()
+            self.pub = config.readline().split("=")[1].strip()
+            if(self.priv == ""):
+                self.priv = None
+            if(self.pub == ""):
+                self.pub = None
 
 """
     Class RSA_Key
@@ -29,16 +45,16 @@ class Config():
 """
 class RSA_Key():
 
-    def __init__(self, config, public_file=None, private_file=None, public_bytes=None, private_bytes=None):
+    def __init__(self, config:str, *, public_file:str=None, private_file:str=None, public_bytes:str=None, private_bytes:str=None) -> None:
         #initialize values
         self.public_bytes = None
         self.private_bytes = None
 
         #check arguements passed (can't pass in file location and byte representation for same key type due to overwrites)
         if public_bytes and public_file:
-            print("Too many paramaters for public key passed. Only pass a file or a string")
+            print(f"{bcolors.FAIL}Too many paramaters for public key passed. Only pass a file or a string{bcolors.ENDC}")
         if private_bytes and private_file:
-            print("Too many paramaters for private key passed. Only pass a file or a string")
+            print(f"{bcolors.FAIL}Too many paramaters for private key passed. Only pass a file or a string{bcolors.ENDC}")
         
         #If key bytes are passed in, set as key value
         if public_bytes:
@@ -48,9 +64,12 @@ class RSA_Key():
 
         #Import keys from file
         if public_file:
-            self.public_bytes = self.ImportKey(public_file)
+            self.ImportKey(public_file)
         if private_file:
-            self.private_bytes = self.ImportKey(private_file)
+            self.ImportKey(private_file, is_private=True)
+
+        #print(self.public_bytes.export_key(format="PEM"))
+        #print(self.private_bytes.export_key(format="PEM"))
     
     """
         Function Gen Keys
@@ -59,7 +78,7 @@ class RSA_Key():
         parameters: None
         return:     public key, private key
     """
-    def GenKeys(self):
+    def GenKeys(self) -> None:
         #generate RSA 4096 private key
         self.private_bytes = RSA.generate(bits=4096)
         #use private key to generate public key
@@ -72,14 +91,29 @@ class RSA_Key():
         param: key to be saved
         returns: True if successful, None if error
     """
-    def ExportKey(self, file, key):
+    def ExportKey(self, file:str, key:str):
+        pass1 = None
+        pem = b""
+        if(key.has_private()):
+            print(f"{bcolors.WARNING}You are exporting a private key, please provide \na secure password to protect your private key{bcolors.ENDC}")
+            pass1 = getpass.getpass("Enter password for private key  : ")
+            pass2 = getpass.getpass("Confirm password for private key: ")
+            if(pass1 != pass2):
+                print(f"{bcolors.FAIL}ERROR: PASSWORDS DO NOT MATCH (keys were not generated){bcolors.ENDC}")
+                return None
+        #make sure to encrypt private key
+        if(key.has_private()):
+            pem = key.export_key(format='PEM', passphrase=pass1, pkcs=8)
+        else:
+            pem = key.export_key(format='PEM')
+        #write pem file
         try:
             with open(file, "wb") as pem_file:
-                pem = key.export_key(format='PEM')
                 pem_file.write(pem)
         except Exception as e:
-            print("Error writing key to file")
+            print(f"{bcolors.FAIL}ERROR: OPENING OR WRITTING TO PEM FILE{bcolors.ENDC}")
             return None
+        #return successful or not
         return True
     
     """
@@ -87,15 +121,24 @@ class RSA_Key():
         ===================
         Import key from file and return the byte string
         param: file to read from
-        returns: byte string (None if there is an error)
+        returns: void
     """
-    def ImportKey(self, file):
+    def ImportKey(self, file:str, *, is_private:bool=False):
+        pass1=None
+        if(is_private):
+            pass1 = getpass.getpass("Enter password for private key: ")
         try:
             with open(file, "r") as pem_file:
-                return RSA.import_key(pem_file.read())
+                key_bytes = RSA.import_key(pem_file.read(), passphrase=pass1)
+                if is_private:
+                    self.private_bytes = key_bytes
+                else:
+                    self.public_bytes = key_bytes
+                return True
+        except ValueError as ve:
+            print(f"{bcolors.FAIL}ERROR: INCORRECT PASSWORD{bcolors.ENDC}")   
         except Exception as e:
-            print("Error reading key from file")
-            return None
+            print(f"{bcolors.FAIL}ERROR: KEY NOT READ FROM FILE '{file}' {bcolors.ENDC}")
         return None
     """
         Function Encrypt Message
@@ -104,15 +147,30 @@ class RSA_Key():
         param: message to be encrypted
         returns: string representing the cipher text
     """
-    def EncryptMessage(self, message):
+    def EncryptMessage(self, message:str) -> (str, str, str, str):
         #generate session key
         session_key = get_random_bytes(32)
+        
+        if(self.public_bytes is None):
+            print(f"{bcolors.FAIL}ERROR: TRYING TO ENCRYPT WITH NULL KEY{bcolors.ENDC}")
+            return None
+        
         #encrypt session key using asymetric encryption (public key)
-        cipher_rsa = PKCS1_OAEP.new(self.public_bytes, hashAlgo=SHA512)
-        enc_session_key = cipher_rsa.encrypt(session_key)
+        try:
+            cipher_rsa = PKCS1_OAEP.new(self.public_bytes, hashAlgo=SHA512)
+            enc_session_key = cipher_rsa.encrypt(session_key)
+        except Exception:
+            print(f"{bcolors.FAIL}ERROR: RSA ENCRYPTION{bcolors.ENDC}")
+            return None
+        
         #use AES and session_key to encrypt message
-        cipher_aes = AES.new(session_key, AES.MODE_EAX)
-        ciphertext, tag = cipher_aes.encrypt_and_digest(message.encode("utf-8"))
+        try:
+            cipher_aes = AES.new(session_key, AES.MODE_EAX)
+            ciphertext, tag = cipher_aes.encrypt_and_digest(message.encode("utf-8"))
+        except Exception:
+            print(f"{bcolors.FAIL}ERROR: AES ENCRYPTION{bcolors.ENDC}")
+            return None
+        
         return (enc_session_key, cipher_aes.nonce, tag, ciphertext)
     """
         Function Decrypt Message
@@ -121,44 +179,126 @@ class RSA_Key():
         param: ciphertext to be decrypted
         returns: string representing the message
     """
-    def DecryptMessage(self, ciphertext):
+    def DecryptMessage(self, ciphertext:str) -> str:
         enc_session_key = ciphertext[0]
         nonce = ciphertext[1]
         tag = ciphertext[2]
         ciphertext = ciphertext[3]
 
+        if(self.private_bytes is None):
+            print(f"{bcolors.FAIL}ERROR: ATTEMPTING DECRYPTION WITH NULL KEY{bcolors.ENDC}")
+            return None
+        
         # Decrypt the session key with the private RSA key
-        cipher_rsa = PKCS1_OAEP.new(self.private_bytes, hashAlgo=SHA512)
-        session_key = cipher_rsa.decrypt(enc_session_key)
-
+        try:
+            cipher_rsa = PKCS1_OAEP.new(self.private_bytes, hashAlgo=SHA512)
+            session_key = cipher_rsa.decrypt(enc_session_key)
+        except Exception:
+            print(f"{bcolors.FAIL}ERROR: RSA DECRYPTION{bcolors.ENDC}")
+            return None
+        
         # Decrypt the data with the AES session key
-        cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
-        data = cipher_aes.decrypt_and_verify(ciphertext, tag)
-        return data.decode("utf-8")
+        try:
+            cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
+            message = cipher_aes.decrypt_and_verify(ciphertext, tag)
+        except Exception:
+            print(f"{bcolors.FAIL}ERROR: AES DECRYPTION{bcolors.ENDC}")
+            return None
+        
+        return message.decode("utf-8")
+
+def print_menu(my_keys:RSA_Key):
+    has_pub = not my_keys.public_bytes is None
+    has_priv = not my_keys.private_bytes is None
+    print("{0:40s}".format("Welcome to the p2p server"))
+    print("{0:40s}{2:5s}{1:20s}".format("1) Import Keys"," : Public Key Loaded",str(has_pub)))
+    print("{0:40s}{2:5s}{1:20s}".format("2) Export Keys"," : Private Key Loaded",str(has_priv)))
+    print("{0:40s}".format("3) Generate new keys"))
+    print("{0:40s}".format("4) Start Session"))
+    print("{0:40s}".format("5) View Session"))
+    print("{0:40s}".format("6) Clear Session"))
+    print("{0:40s}".format("9) Exit"))
 
 def main():
     config = Config()
-    my_keys = RSA_Key(config, private_file="my_priv.pem", public_file="my_pub.pem")
+    my_keys = RSA_Key(config, private_file=config.priv, public_file=config.pub)
     #my_keys = RSA_Key(config)
     #my_keys.GenKeys()
-    #my_keys.ExportKey(config.dir + "my_pub.pem", my_keys.public_bytes)
-    #my_keys.ExportKey(config.dir + "my_priv.pem", my_keys.private_bytes)
+    #my_keys.ExportKey(config.dir + "my_pub2.pem", my_keys.public_bytes)
+    #my_keys.ExportKey(config.dir + "my_priv2.pem", my_keys.private_bytes)
+    answer = '0'
+    while(answer != '9'):
+        print_menu(my_keys)
+        answer = input(":").strip()
+        print(answer)
+        match answer:
+            case "1": #import keys
+                file_name = input("What is the name of the pem file you wish to import?\n:").strip()
+                is_priv = input("Is this a private key? [y/Y/n/N]\n:").strip()
+                #convert str var into boolean var
+                is_priv = is_priv == "y" or is_priv == "Y" 
+                if(my_keys.ImportKey(file_name, is_private=is_priv)):
+                    print(f"{bcolors.OKGREEN}Successful import!{bcolors.ENDC}")
+                input("press 'ENTER' to continue")
+            case "2": #export keys
+                file_name = input("What is the name of the pem file you wish to export to?\n:").strip()
+                key_type = input("Do you wish to export the public or private key? [public/private]\n:")
+                if key_type == "public":
+                    if(my_keys.ExportKey(file_name, my_keys.public_bytes)):
+                        print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+                elif key_type == "private":
+                    if(my_keys.ExportKey(file_name, my_keys.private_bytes)):
+                        print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+                else:
+                    print(f"{bcolors.FAIL}ERROR: INVALID KEY TYPE{bcolors.ENDC}")
+                input("press 'ENTER' to continue")
+            case "3": #generate keys
+                answer = input(f"{bcolors.WARNING}Are you sure you want to regenerate keys?\nAny public key sent will be invalid [y/Y/n/N]\n:{bcolors.ENDC}")
+                if answer == "y" or answer == "Y":
+                    print("Generating new keys... please be patient")
+                    my_keys.GenKeys()
+                    print(f"{bcolors.OKGREEN}Keys have been regenerated{bcolors.ENDC}")
+                    print(f"{bcolors.WARNING}*Make sure to save keys or they will not be available next session*{bcolors.ENDC}")
+                else:
+                    print(f"{bcolors.FAIL}Regeneration has been aborted{bcolors.ENDC}")
+                
+                input("press 'ENTER' to continue")
+            case "4":
+                #start session
+                pass
+            case "5":
+                #view session
+                pass
+            case "6":
+                #clear session
+                pass
+            case "9":
+                pass
+            case _:
+                print(f"{bcolors.FAIL}INVALID OPTION{bcolors.ENDC}")
+
     print("encrypting message hello world")
-    #encrypted_message = my_keys.EncryptMessage("Hello World")
-    
+    encrypted_message = my_keys.EncryptMessage("How is your day going?")
+    with open("test.txt", "wb") as test:
+        [test.write(m) for m in encrypted_message]
+    #print(my_keys.DecryptMessage(encrypted_message))
+    with open("test.txt", "rb") as test:
+        encrypted_message = [ test.read(x) for x in (512, 16, 16, -1) ]
+        decrypted_message = my_keys.DecryptMessage(encrypted_message)
+    print(decrypted_message)
     
 
 if __name__ == "__main__":
     main()
 
 """
-write bytes to file 
+write bytes to stream 
 -------------------
 with open("test.txt", "wb") as test:
     [test.write(m) for m in encrypted_message]
 
 
-read bytes from file 
+read bytes from stream 
 --------------------
 with open("test.txt", "rb") as test:
     encrypted_message = [ test.read(x) for x in (512, 16, 16, -1) ]
