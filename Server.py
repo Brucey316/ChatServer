@@ -395,6 +395,53 @@ def print_menu(my_keys:RSA_Key):
     print("{0:40s}".format("6) Clear Session"))
     print("{0:40s}".format("9) Exit"))
 
+def import_keys(my_keys):
+    #get parameters for importing keys from user
+    file_name = input("What is the name of the pem file you wish to import?\n:").strip()
+    is_priv = input("Is this a private key? [y/Y/n/N]\n:").strip()
+    #convert str var into boolean var
+    is_priv = is_priv == "y" or is_priv == "Y" 
+    #import keys into system
+    if(my_keys.ImportKey(file_name, is_private=is_priv)):
+        print(f"{bcolors.OKGREEN}Successful import!{bcolors.ENDC}")
+
+def export_keys(my_keys):
+    #get parameters for exporting keys from user
+    file_name = input("What is the name of the pem file you wish to export to?\n:")
+    key_type = input("Do you wish to export the public or private key? [public/private]\n:")
+    #check if public or private key and then export
+    if key_type == "public":
+        if(my_keys.ExportKey(file_name, my_keys.public_bytes)):
+            print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+    elif key_type == "private":
+        if(my_keys.ExportKey(file_name, my_keys.private_bytes)):
+            print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+    #if user entered erroneous input
+    else:
+        print(f"{bcolors.FAIL}ERROR: INVALID KEY TYPE{bcolors.ENDC}")
+
+def generate_keys(my_keys):
+    answer = input(f"{bcolors.WARNING}Are you sure you want to regenerate keys?\nAny public key sent will be invalid [y/Y/n/N]\n:{bcolors.ENDC}")
+    if answer == "y" or answer == "Y":
+        print("Generating new keys... please be patient")
+        my_keys.GenKeys()
+        print(f"{bcolors.OKGREEN}Keys have been regenerated{bcolors.ENDC}")
+        print(f"{bcolors.WARNING}*Make sure to save keys or they will not be available next session*{bcolors.ENDC}")
+    else:
+        print(f"{bcolors.FAIL}Regeneration has been aborted{bcolors.ENDC}")
+
+def start_session(server):
+    ip = input("Please enter an IP address to connect to\n:").strip()
+    port = input("Please enter the destination port to connect to\n:").strip()
+    server.connect_client(ip_address=ip, port=port)
+    pass
+
+def view_session(server):
+    pass
+
+def clear_session(server):
+    pass
+
 def main():
     #import config file
     config = Config()
@@ -412,65 +459,31 @@ def main():
         #grab user input
         answer = input(":").strip()
         match answer:
-            case "1": #import keys
-                #get parameters for importing keys from user
-                file_name = input("What is the name of the pem file you wish to import?\n:").strip()
-                is_priv = input("Is this a private key? [y/Y/n/N]\n:").strip()
-                #convert str var into boolean var
-                is_priv = is_priv == "y" or is_priv == "Y" 
-                #import keys into system
-                if(my_keys.ImportKey(file_name, is_private=is_priv)):
-                    print(f"{bcolors.OKGREEN}Successful import!{bcolors.ENDC}")
-                input("press 'ENTER' to continue")
-
-            case "2": #export keys
-                #get parameters for exporting keys from user
-                file_name = input("What is the name of the pem file you wish to export to?\n:").strip()
-                key_type = input("Do you wish to export the public or private key? [public/private]\n:")
-                #check if public or private key and then export
-                if key_type == "public":
-                    if(my_keys.ExportKey(file_name, my_keys.public_bytes)):
-                        print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
-                elif key_type == "private":
-                    if(my_keys.ExportKey(file_name, my_keys.private_bytes)):
-                        print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
-                #if user entered erroneous input
-                else:
-                    print(f"{bcolors.FAIL}ERROR: INVALID KEY TYPE{bcolors.ENDC}")
-                input("press 'ENTER' to continue")
-
-            case "3": #generate keys
-                answer = input(f"{bcolors.WARNING}Are you sure you want to regenerate keys?\nAny public key sent will be invalid [y/Y/n/N]\n:{bcolors.ENDC}")
-                if answer == "y" or answer == "Y":
-                    print("Generating new keys... please be patient")
-                    my_keys.GenKeys()
-                    print(f"{bcolors.OKGREEN}Keys have been regenerated{bcolors.ENDC}")
-                    print(f"{bcolors.WARNING}*Make sure to save keys or they will not be available next session*{bcolors.ENDC}")
-                else:
-                    print(f"{bcolors.FAIL}Regeneration has been aborted{bcolors.ENDC}")
-                
-                input("press 'ENTER' to continue")
-
+            case "1": 
+                #import keys
+                import_keys(my_keys=my_keys)
+            case "2": 
+                #export keys
+                export_keys(my_keys=my_keys)
+            case "3": 
+                #generate keys
+                generate_keys(my_keys=my_keys)
             case "4":
                 #start session
-                ip = input("Please enter an IP address to connect to\n:").strip()
-                port = input("Please enter the destination port to connect to\n:").strip()
-                server.connect_client(ip_address=ip, port=port)
-
+                start_session(server=server)
             case "5":
                 #view session
-                pass
-
+                view_session(server=server)
             case "6":
                 #clear session
-                pass
-
+                clear_session(server=server)
             case "9":
-                pass
-
+                #exit
+                break
             case _:
                 print(f"{bcolors.FAIL}INVALID OPTION{bcolors.ENDC}")
-    
+        input("press 'ENTER' to continue")
+    """
     print("encrypting message hello world")
     encrypted_message = my_keys.EncryptMessage("How is your day going?")
     with open("test.txt", "wb") as test:
@@ -480,7 +493,7 @@ def main():
         encrypted_message = [ test.read(x) for x in (512, 16, 16, 4, -1) ]
         decrypted_message = my_keys.DecryptMessage(encrypted_message)
     print(decrypted_message)
-
+    """
     #disable the server from listening to more connections
     server.running = False
     #send sudo client to server to escape accept() hang
