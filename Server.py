@@ -9,20 +9,21 @@ import getpass
 
 #other libraries
 import time
-import re
 
 #Library for p2p networking
 import socket
-import threading
+from threading import Thread, Lock, active_count
 import ipaddress
 
 #SERVER FINALS
-PORT = 4444 #port to run the server on
+PORT = 4445 #port to run the server on
 SERVER_IP = socket.gethostbyname(socket.gethostname()) #server ip
 MSG_DISS = b"[DISCONNECT]"   #message to safely disconnect from server
+MSG_CONN = "[CONNECT]"
 HEADER = 4
-MAX_MESSAGE_LEN = 256**HEADER-1
+MAX_MESSAGE_LEN = 500
 FORMAT = "utf-8"
+PK_LEN = 799
 
 #CRYPTO FINALS
 RSA_BITS = 4096
@@ -32,7 +33,7 @@ CIPHER_MODE = AES.MODE_GCM
 PKI_FILE_FORMAT = "PEM"
 
 #text colors
-class bcolors:
+class Colors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
     OKCYAN = '\033[96m'
@@ -86,9 +87,9 @@ class RSA_Key():
 
         #check arguements passed (can't pass in file location and byte representation for same key type due to overwrites)
         if public_bytes and public_file:
-            print(f"{bcolors.FAIL}Too many paramaters for public key passed. Only pass a file or a string{bcolors.ENDC}")
+            print(f"{Colors.FAIL}Too many paramaters for public key passed. Only pass a file or a string{Colors.ENDC}")
         if private_bytes and private_file:
-            print(f"{bcolors.FAIL}Too many paramaters for private key passed. Only pass a file or a string{bcolors.ENDC}")
+            print(f"{Colors.FAIL}Too many paramaters for private key passed. Only pass a file or a string{Colors.ENDC}")
         
         #If key bytes are passed in, set as key value
         if public_bytes:
@@ -127,11 +128,11 @@ class RSA_Key():
         pem = b""
         if(key.has_private()):
             #get password to encrypt the PEM file
-            print(f"{bcolors.WARNING}You are exporting a private key, please provide \na secure password to protect your private key{bcolors.ENDC}")
+            print(f"{Colors.WARNING}You are exporting a private key, please provide \na secure password to protect your private key{Colors.ENDC}")
             pass1 = getpass.getpass("Enter password for private key  : ")
             pass2 = getpass.getpass("Confirm password for private key: ")
             if(pass1 != pass2):
-                print(f"{bcolors.FAIL}ERROR: PASSWORDS DO NOT MATCH (keys were not generated){bcolors.ENDC}")
+                print(f"{Colors.FAIL}ERROR: PASSWORDS DO NOT MATCH (keys were not generated){Colors.ENDC}")
                 return None
         #make sure to encrypt private key
         if(key.has_private()):
@@ -143,7 +144,7 @@ class RSA_Key():
             with open(file, "wb") as pem_file:
                 pem_file.write(pem)
         except Exception as e:
-            print(f"{bcolors.FAIL}ERROR: OPENING OR WRITTING TO PEM FILE{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: OPENING OR WRITTING TO PEM FILE{Colors.ENDC}")
             return None
         #return successful or not
         return True
@@ -156,11 +157,11 @@ class RSA_Key():
         returns: void
     """
     def ImportKey(self, file:str, *, is_private:bool=False):
-        pass1=None
         
         try:
             with open(file, "r") as pem_file:
                 #get password if private key
+                pass1=None
                 if(is_private):
                     pass1 = getpass.getpass("Enter password for private key: ")
                 #read key from file 
@@ -172,9 +173,9 @@ class RSA_Key():
                     self.public_bytes = key_bytes
                 return True
         except ValueError as ve:
-            print(f"{bcolors.FAIL}ERROR: INCORRECT PASSWORD{bcolors.ENDC}")   
+            print(f"{Colors.FAIL}ERROR: INCORRECT PASSWORD{Colors.ENDC}")   
         except Exception as e:
-            print(f"{bcolors.FAIL}ERROR: KEY NOT READ FROM FILE '{file}' {bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: KEY NOT READ FROM FILE '{file}' {Colors.ENDC}")
         return None
     
     """
@@ -184,25 +185,25 @@ class RSA_Key():
         param: message to be encrypted
         returns: string representing the cipher text
     """
-    def EncryptMessage(self, message:str) -> (str, str, str, str):
+    def EncryptMessage(self, message:str, public_bytes:str, override=False) -> (str, str, str, str):
         #make sure message length is short enough to be sent in one message
-        if(len(message) > MAX_MESSAGE_LEN):
-            print(f"{bcolors.FAIL}ERROR: MESSAGE IS TOO LONG, PLEASE SHORTEN TO LESS THAN {MAX_MESSAGE_LEN:,} CHARACTERS{bcolors.ENDC}")
+        if(not override and len(message) > MAX_MESSAGE_LEN):
+            print(f"{Colors.FAIL}ERROR: MESSAGE IS TOO LONG, PLEASE SHORTEN TO LESS THAN {MAX_MESSAGE_LEN:,} CHARACTERS{Colors.ENDC}")
             input("PRESS ENTER TO CONTINUE")
             return None
         #generate session key
         session_key = get_random_bytes(AES_BITS//8)
 
-        if(self.public_bytes is None):
-            print(f"{bcolors.FAIL}ERROR: TRYING TO ENCRYPT WITH NULL KEY{bcolors.ENDC}")
+        if(public_bytes is None):
+            print(f"{Colors.FAIL}ERROR: TRYING TO ENCRYPT WITH NULL KEY{Colors.ENDC}")
             return None
         
         #encrypt session key using asymetric encryption (public key)
         try:
-            cipher_rsa = PKCS1_OAEP.new(self.public_bytes, hashAlgo=HASH_ALGO)
+            cipher_rsa = PKCS1_OAEP.new(key=public_bytes, hashAlgo=HASH_ALGO)
             enc_session_key = cipher_rsa.encrypt(session_key)
         except Exception:
-            print(f"{bcolors.FAIL}ERROR: RSA ENCRYPTION{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: RSA ENCRYPTION{Colors.ENDC}")
             return None
         
         #use AES and session_key to encrypt message
@@ -210,9 +211,9 @@ class RSA_Key():
             cipher_aes = AES.new(session_key, CIPHER_MODE)
             ciphertext, tag = cipher_aes.encrypt_and_digest(message.encode(FORMAT))
         except Exception:
-            print(f"{bcolors.FAIL}ERROR: AES ENCRYPTION{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: AES ENCRYPTION{Colors.ENDC}")
             return None
-        #print(f">%x\n>%x\n>%x\n>%x\n", enc_session_key, cipher_aes.nonce, tag, len(ciphertext).to_bytes(HEADER,'big'), ciphertext)
+        #print(f"ENCRYPT:\n>%x\n>%x\n>%x\n>%x\n", enc_session_key, cipher_aes.nonce, tag, len(ciphertext).to_bytes(HEADER,'big'), ciphertext)
 
         #print(len(enc_session_key), len(cipher_aes.nonce), len(tag), len(ciphertext).to_bytes(HEADER,'big'), len(message))
         return (enc_session_key, cipher_aes.nonce, tag, len(ciphertext).to_bytes(HEADER,'big'), ciphertext)
@@ -228,11 +229,12 @@ class RSA_Key():
         enc_session_key = ciphertext[0]
         nonce = ciphertext[1]
         tag = ciphertext[2]
-        ciphertext = ciphertext[4]
+        ciphertext = ciphertext[3]
 
+        #print(f"DECRYPT:\n>%x\n>%x\n>%x\n>%x\n", enc_session_key, nonce, tag, len(ciphertext).to_bytes(HEADER,'big'), ciphertext)
         #check if key is not NULL
         if(self.private_bytes is None):
-            print(f"{bcolors.FAIL}ERROR: ATTEMPTING DECRYPTION WITH NULL KEY{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: ATTEMPTING DECRYPTION WITH NULL KEY{Colors.ENDC}")
             return None
         
         # Decrypt the session key with the private RSA key
@@ -240,7 +242,7 @@ class RSA_Key():
             cipher_rsa = PKCS1_OAEP.new(self.private_bytes, hashAlgo=HASH_ALGO)
             session_key = cipher_rsa.decrypt(enc_session_key)
         except Exception:
-            print(f"{bcolors.FAIL}ERROR: RSA DECRYPTION{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: RSA DECRYPTION{Colors.ENDC}")
             return None
         
         # Decrypt the data with the AES session key
@@ -248,7 +250,7 @@ class RSA_Key():
             cipher_aes = AES.new(session_key, CIPHER_MODE, nonce)
             message = cipher_aes.decrypt_and_verify(ciphertext, tag)
         except Exception:
-            print(f"{bcolors.FAIL}ERROR: AES DECRYPTION{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: AES DECRYPTION{Colors.ENDC}")
             return None
         
         return message.decode(FORMAT)
@@ -260,7 +262,6 @@ class RSA_Key():
     connections from clients
 """ 
 class Server():
-    
     """
         Constructor
         -----------
@@ -274,10 +275,11 @@ class Server():
     def __init__(self, keys:RSA_Key):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((SERVER_IP, PORT))
-        print(f"{bcolors.OKCYAN}[SERVER] ESTABLISHED @ {SERVER_IP}:{PORT}{bcolors.ENDC}")
+        print(f"{Colors.OKCYAN}[SERVER] ESTABLISHED @ {SERVER_IP}:{PORT}{Colors.ENDC}")
         self.keys = keys
         self.connections = []
         self.clients = []
+        self.keychain = {}
         self.running = True
     
     """
@@ -290,27 +292,25 @@ class Server():
         returns: void
     """
     def handle_client(self, conn:socket, addr ):
-        if self.running:
-            print(f"{bcolors.OKCYAN}[NEW CONNECTION]: {addr}{bcolors.ENDC}")
-        
         #run while client is connected (used for graceful disconnect)
         connected = True
+        #upon connection, go through handshake first
+        if addr[0] == SERVER_IP and addr[1] == PORT:
+            return
+        if not self.handshake(isClient=False, client=conn, addr=addr):
+            return
         while connected:
-            key = conn.recv(512)
-            #if message data is blank, do not process
-            if not key:
+            #wait and receive messages
+            message = None
+            try:
+                message = self.receive_message(conn=conn)
+                if message ==  MSG_DISS:
+                    break
+            except ValueError:
+                print(f"{Colors.FAIL}ERROR: CORRUPT MESSAGE RECEIVED{Colors.ENDC}")
+            if message == None:
                 continue
-            if key == MSG_DISS:
-                break
-            if len(key) != 512:
-                print(f"{bcolors.FAIL}ERROR: CORRUPT MESSAGE RECEIVED{bcolors.ENDC}")
-                continue
-            nonce = conn.recv(16)
-            tag = conn.recv(16) #
-            header = conn.recv(4) #header
-            cipher_text = conn.recv( int.from_bytes(header, "big") )
-            message = self.keys.DecryptMessage((key,nonce,tag,cipher_text))
-            print(f"Message received: {message}")
+            print(message)
         conn.close()
 
     """
@@ -321,29 +321,79 @@ class Server():
             ip_address: who to connect to
             port: which port to use default use the PORT final var
     """
-    def connect_client(self, ip_address, port=PORT):
+    def connect_to_client(self, ip_address, port=PORT):
         try:
             ipaddress.ip_address(ip_address)
         except ValueError as ve:
-            print(f"{bcolors.FAIL}ERROR: MALFORMED IP ADDRRESS '{ip_address}'{bcolors.ENDC}\n{ve}")
-            return
+            print(f"{Colors.FAIL}ERROR: MALFORMED IP ADDRRESS '{ip_address}'{Colors.ENDC}")
+            return None
         client = socket.socket()
         try:
             #attempt connection to ip_address:port
             client.connect((ip_address, int(port)))
         except ValueError:
-            print(f"{bcolors.FAIL}ERROR: MALFORMED PORT NUMBER '{port}'{bcolors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: MALFORMED PORT NUMBER '{port}'{Colors.ENDC}")
             client.close()
             return None
         except:
             #connection failed, print error and return 
-            print(f"{bcolors.FAIL}ERROR: CONNECTION TO {ip_address}:{port} FAILED{bcolors.ENDC}\n")
+            print(f"{Colors.FAIL}ERROR: CONNECTION TO {ip_address}:{port} FAILED{Colors.ENDC}")
             client.close()
             return None
         #connection successful, keep track of active connection
+        if ip_address == SERVER_IP and port == PORT:
+            client.close()
+            return True
         self.connections.append(client)
-        return True
+        return self.handshake(isClient=True, client=client, addr=(ip_address, int(port)))
     
+    """
+        Function Handshake
+        ==================
+        Allows a way to exchange pub keys and test for corruption upon connection
+        client
+        sending pk -> recieve_pk -> send test message -> receive test message
+        server
+        receiving_pk -> sending pk -> receive test message -> sending test message
+    """
+    def handshake(self, isClient:bool, client:socket, addr):
+        public_key = None
+        if isClient:
+            #send public key to server
+            #print("C Handshake 1:")
+            client.send(self.keys.public_bytes.export_key(format='PEM', passphrase=None, pkcs=1))
+            #wait for 'host' public key
+            #print("C Handshake 2:")
+            public_key = RSA.import_key(client.recv(PK_LEN))
+            #send test message to server
+            #print("C Handshake 3:")
+            #change to send all at once to avoid data
+            client.send(b"".join(self.keys.EncryptMessage(message=MSG_CONN, public_bytes=public_key)))
+            #wait for 'host' test message
+            #print("C Handshake 4:")
+            if not self.receive_message(conn=client) == MSG_CONN:
+                return False
+        else:
+            #receive the public key from client
+            #print("S Handshake 1:")
+            public_key = RSA.import_key(client.recv(PK_LEN))
+            #send public key to client
+            #print("S Handshake 2:")
+            client.send(self.keys.public_bytes.export_key(format='PEM', passphrase=None, pkcs=1))
+            #receive the test message
+            #print("S Handshake 3:")
+            if not self.receive_message(conn=client) == MSG_CONN:
+                return False
+            #send test message
+            #print("S Handshake 4:")
+            client.send(b"".join(self.keys.EncryptMessage(message=MSG_CONN, public_bytes=public_key)))
+
+        print(f"{Colors.OKCYAN}[SERVER] CONNECTION ESTABLISHED {addr[0]}:{addr[1]}{Colors.ENDC}")
+        #save public key into keychain
+        if not public_key is None:
+            self.keychain.update({addr:client})
+        return True
+
     """
         Send Message
 
@@ -351,6 +401,29 @@ class Server():
     def send_message(self, conn:socket, addr):
         pass
 
+    """
+        Function Receive Message
+        =========================
+        Handles the de-encapsulation of a 'packet' passed in 
+    """
+    def receive_message(self, conn:socket):
+        aes_key = conn.recv(512)
+        #if message data is blank, do not process
+        if not aes_key:
+            return None
+        if aes_key == MSG_DISS:
+            return MSG_DISS
+        if len(aes_key) != 512:
+            #print(f"{Colors.FAIL}ERROR: CORRUPT MESSAGE RECEIVED{Colors.ENDC}")
+            raise ValueError
+        nonce = conn.recv(16)
+        tag = conn.recv(16)
+        header = conn.recv(4) #header
+        cipher_text = conn.recv( int.from_bytes(header, "big") )
+        message = self.keys.DecryptMessage((aes_key,nonce,tag,cipher_text))
+        if message == None:
+            raise ValueError
+        return message
     """
         prints out existing connections both clients and servers
     """
@@ -368,13 +441,16 @@ class Server():
     """
     def start(self):
         self.server.listen()
-        print(f"{bcolors.OKCYAN}[SERVER] LISTENING FOR NEW CONNECTIONS{bcolors.ENDC}")
+        print(f"{Colors.OKCYAN}[SERVER] LISTENING FOR NEW CONNECTIONS{Colors.ENDC}")
         while self.running:
             conn, addr = self.server.accept()
-            thread = threading.Thread(target=self.handle_client, args=(conn,addr))
+            print(f"{Colors.OKCYAN}[SERVER] CONNECTION REQUEST {addr[0]}:{addr[1]}{Colors.ENDC}")
+            if not self.running:
+                continue
+            thread = Thread(target=self.handle_client, args=(conn,addr))
             thread.start()
-            if self.running: 
-                print(f"{bcolors.OKCYAN}[ACTIVE CONNECTIONS] {threading.active_count()-2}{bcolors.ENDC}")
+            print(f"{Colors.OKCYAN}[ACTIVE CONNECTIONS] {active_count()-2}{Colors.ENDC}")
+        print(f"{Colors.OKCYAN}[SERVER] NO LONGER LISTENING{Colors.ENDC}")
 
 """
     Function Print Menu
@@ -403,43 +479,47 @@ def import_keys(my_keys):
     is_priv = is_priv == "y" or is_priv == "Y" 
     #import keys into system
     if(my_keys.ImportKey(file_name, is_private=is_priv)):
-        print(f"{bcolors.OKGREEN}Successful import!{bcolors.ENDC}")
+        print(f"{Colors.OKGREEN}Successful import!{Colors.ENDC}")
 
-def export_keys(my_keys):
+def export_keys(my_keys:RSA_Key):
     #get parameters for exporting keys from user
     file_name = input("What is the name of the pem file you wish to export to?\n:")
     key_type = input("Do you wish to export the public or private key? [public/private]\n:")
     #check if public or private key and then export
     if key_type == "public":
         if(my_keys.ExportKey(file_name, my_keys.public_bytes)):
-            print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+            print(f"{Colors.OKGREEN}Successful export{Colors.ENDC}")
     elif key_type == "private":
         if(my_keys.ExportKey(file_name, my_keys.private_bytes)):
-            print(f"{bcolors.OKGREEN}Successful export{bcolors.ENDC}")
+            print(f"{Colors.OKGREEN}Successful export{Colors.ENDC}")
     #if user entered erroneous input
     else:
-        print(f"{bcolors.FAIL}ERROR: INVALID KEY TYPE{bcolors.ENDC}")
+        print(f"{Colors.FAIL}ERROR: INVALID KEY TYPE{Colors.ENDC}")
 
-def generate_keys(my_keys):
-    answer = input(f"{bcolors.WARNING}Are you sure you want to regenerate keys?\nAny public key sent will be invalid [y/Y/n/N]\n:{bcolors.ENDC}")
+def generate_keys(my_keys:RSA_Key):
+    answer = input(f"{Colors.WARNING}Are you sure you want to regenerate keys?\nAny public key sent will be invalid [y/Y/n/N]\n:{Colors.ENDC}")
     if answer == "y" or answer == "Y":
         print("Generating new keys... please be patient")
         my_keys.GenKeys()
-        print(f"{bcolors.OKGREEN}Keys have been regenerated{bcolors.ENDC}")
-        print(f"{bcolors.WARNING}*Make sure to save keys or they will not be available next session*{bcolors.ENDC}")
+        print(f"{Colors.OKGREEN}Keys have been regenerated{Colors.ENDC}")
+        print(f"{Colors.WARNING}*Make sure to save keys or they will not be available next session*{Colors.ENDC}")
     else:
-        print(f"{bcolors.FAIL}Regeneration has been aborted{bcolors.ENDC}")
+        print(f"{Colors.FAIL}Regeneration has been aborted{Colors.ENDC}")
 
-def start_session(server):
+def start_session(server:Server):
     ip = input("Please enter an IP address to connect to\n:").strip()
     port = input("Please enter the destination port to connect to\n:").strip()
-    server.connect_client(ip_address=ip, port=port)
+    if(server.connect_to_client(ip_address=ip, port=port)):
+        print(f"{Colors.OKGREEN}SESSION SUCCESSFULLY STARTED{Colors.ENDC}")
+
+def view_session(server:Server):
+
     pass
 
-def view_session(server):
+def clear_session(server:Server):
     pass
 
-def clear_session(server):
+def send_message(server:Server):
     pass
 
 def main():
@@ -449,7 +529,7 @@ def main():
     my_keys = RSA_Key(config, private_file=config.priv, public_file=config.pub)
     #start server side of p2p to accept incoming connections
     server = Server(my_keys)
-    threading.Thread(target=server.start).start()
+    Thread(target=server.start).start()
     time.sleep(1)
     #default value to act as do-while
     answer = '0'
@@ -477,11 +557,13 @@ def main():
             case "6":
                 #clear session
                 clear_session(server=server)
+            case "7":
+                send_message(server=server)
             case "9":
                 #exit
                 break
             case _:
-                print(f"{bcolors.FAIL}INVALID OPTION{bcolors.ENDC}")
+                print(f"{Colors.FAIL}INVALID OPTION{Colors.ENDC}")
         input("press 'ENTER' to continue")
     """
     print("encrypting message hello world")
@@ -497,7 +579,7 @@ def main():
     #disable the server from listening to more connections
     server.running = False
     #send sudo client to server to escape accept() hang
-    server.connect_client(SERVER_IP, PORT)
+    server.connect_to_client(SERVER_IP, PORT)
     #sleep temporarily
     time.sleep(0.5)
     #every server that we have connected to should get a 
@@ -510,7 +592,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+
 
 """
 write bytes to stream 
