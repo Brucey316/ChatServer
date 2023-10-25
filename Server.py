@@ -16,7 +16,7 @@ from threading import Thread, active_count#,Lock
 import ipaddress
 
 #SERVER FINALS
-PORT = 4444 #port to run the server on
+PORT = 4445 #port to run the server on
 SERVER_IP = "127.0.0.1" #socket.gethostbyname(socket.gethostname()) #server ip
 MSG_DISS = b"[DISCONNECT]"   #message to safely disconnect from server
 MSG_CONN = "[CONNECT]"
@@ -123,7 +123,7 @@ class RSA_Key():
         param: key to be saved
         returns: True if successful, None if error
     """
-    def ExportKey(self, file:str, key:str):
+    def ExportKey(self, file:str, key:str) -> bool | None:
         pass1 = None
         pem = b""
         if(key.has_private()):
@@ -156,7 +156,7 @@ class RSA_Key():
         param: file to read from
         returns: void
     """
-    def ImportKey(self, file:str, *, is_private:bool=False):
+    def ImportKey(self, file:str, *, is_private:bool=False) -> bool | None: 
         
         try:
             with open(file, "r") as pem_file:
@@ -185,7 +185,7 @@ class RSA_Key():
         param: message to be encrypted
         returns: string representing the cipher text
     """
-    def EncryptMessage(self, message:str, public_bytes:str, override=False) -> (str, str, str, str):
+    def EncryptMessage(self, message:str, public_bytes:str, override:bool=False) -> tuple[bytes, bytes, bytes, bytes, bytes] | None:
         #make sure message length is short enough to be sent in one message
         if(not override and len(message) > MAX_MESSAGE_LEN):
             print(f"{Colors.FAIL}ERROR: MESSAGE IS TOO LONG, PLEASE SHORTEN TO LESS THAN {MAX_MESSAGE_LEN:,} CHARACTERS{Colors.ENDC}")
@@ -292,7 +292,7 @@ class Server():
             addr:
         returns: void
     """
-    def handle_client(self, conn:socket, addr:tuple, isClient=False):
+    def handle_client(self, conn:socket, addr:tuple[str,int], isClient:bool=False):
         #run while client is connected (used for graceful disconnect)
         connected = True
         #upon connection, go through handshake first
@@ -322,7 +322,7 @@ class Server():
             ip_address: who to connect to
             port: which port to use default use the PORT final var
     """
-    def connect_to_client(self, ip_address, port=PORT):
+    def connect_to_client(self, ip_address:str, port:int=PORT) -> bool | None:
         
         #check if IP is a valid IP address
         try:
@@ -372,7 +372,7 @@ class Server():
         server
         receiving pk -> sending pk -> receive test message -> sending test message
     """
-    def handshake(self, isClient:bool, client:socket, addr):
+    def handshake(self, isClient:bool, client:socket, addr:tuple[str,int]) -> bool:
         public_key = None
         if isClient:
             #send public key to server
@@ -408,7 +408,7 @@ class Server():
         
         #update the metadata for the message threads and connection
         self.keychain.update({addr:(client, public_key)})
-        self.keychain.update({addr:[]})
+        self.messages.update({addr:[]})
         self.clients.append(addr)
         return True
 
@@ -420,7 +420,7 @@ class Server():
             addr: destination address (ip_address, port) tuple 
             message: the message to be sent (str)
     """
-    def send_message(self, addr:tuple, message:str) -> bool:
+    def send_message(self, addr:tuple[str,int], message:str) -> bool:
         socket, pub_key = self.keychain.get(addr)
         try:
             socket.send(b"".join(self.keys.EncryptMessage(message, pub_key)))
@@ -434,7 +434,7 @@ class Server():
         =========================
         Handles the de-encapsulation of a 'packet' passed in 
     """
-    def receive_message(self, conn:socket):
+    def receive_message(self, conn:socket) -> str:
         aes_key = conn.recv(512)
         #if message data is blank, do not process
         if not aes_key:
@@ -455,7 +455,7 @@ class Server():
     """
         prints out existing connections both clients and servers
     """
-    def get_connections(self):
+    def get_connections(self) -> None:
         print(f"Active Connections:")
         for connections in self.clients:
             print(f"\t{connections[0]}:{connections[1]}")
@@ -469,7 +469,7 @@ class Server():
         param: None
         returns: None
     """
-    def start(self):
+    def start(self) -> None:
         self.server.listen()
         print(f"{Colors.OKCYAN}[SERVER] LISTENING FOR NEW CONNECTIONS{Colors.ENDC}")
         while self.running:
@@ -489,7 +489,7 @@ class Server():
     param: the keys of the user
     returns: None
 """
-def print_menu(my_keys:RSA_Key):
+def print_menu(my_keys:RSA_Key) -> None:
     has_pub = not my_keys.public_bytes is None
     has_priv = not my_keys.private_bytes is None
     print("{0:40s}".format("Welcome to the p2p server"))
@@ -651,7 +651,7 @@ def main():
     #detatch message and should be detached from
     for client in server.clients:
         connection = server.keychain.get(client)[0]
-        connection.sendall(MSG_DISS)
+        connection.send(MSG_DISS)
         connection.close()
     #close the server
     server.server.close()
