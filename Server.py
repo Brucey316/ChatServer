@@ -12,12 +12,12 @@ import time
 
 #Library for p2p networking
 import socket
-from threading import Thread, Lock, active_count
+from threading import Thread, active_count#,Lock
 import ipaddress
 
 #SERVER FINALS
-PORT = 4445 #port to run the server on
-SERVER_IP = socket.gethostbyname(socket.gethostname()) #server ip
+PORT = 4444 #port to run the server on
+SERVER_IP = "127.0.0.1" #socket.gethostbyname(socket.gethostname()) #server ip
 MSG_DISS = b"[DISCONNECT]"   #message to safely disconnect from server
 MSG_CONN = "[CONNECT]"
 HEADER = 4
@@ -277,9 +277,10 @@ class Server():
         self.server.bind((SERVER_IP, PORT))
         print(f"{Colors.OKCYAN}[SERVER] ESTABLISHED @ {SERVER_IP}:{PORT}{Colors.ENDC}")
         self.keys = keys
-        self.connections = []
-        self.clients = []
-        self.keychain = {}
+        self.clients = []   # (ip,port)
+        self.keychain = {} # (ip,port) -> (socket,public_key)
+        self.messages = {} # (ip,port) -> messages str[]
+        self.contacts = {} # name:str -> (ip,port)
         self.running = True
     
     """
@@ -291,14 +292,13 @@ class Server():
             addr:
         returns: void
     """
-    def handle_client(self, conn:socket, addr ):
+    def handle_client(self, conn:socket, addr:tuple, isClient=False):
         #run while client is connected (used for graceful disconnect)
         connected = True
         #upon connection, go through handshake first
-        if addr[0] == SERVER_IP and addr[1] == PORT:
-            return
-        if not self.handshake(isClient=False, client=conn, addr=addr):
-            return
+        if not self.handshake(isClient=isClient, client=conn, addr=addr):
+            conn.close()
+            return False
         while connected:
             #wait and receive messages
             message = None
@@ -310,6 +310,7 @@ class Server():
                 print(f"{Colors.FAIL}ERROR: CORRUPT MESSAGE RECEIVED{Colors.ENDC}")
             if message == None:
                 continue
+            print(f"{Colors.OKCYAN}[SERVER] RECEIVED MESSAGE FROM {addr[0]}{Colors.ENDC}\n:")
             print(message)
         conn.close()
 
@@ -322,39 +323,54 @@ class Server():
             port: which port to use default use the PORT final var
     """
     def connect_to_client(self, ip_address, port=PORT):
+        
+        #check if IP is a valid IP address
         try:
             ipaddress.ip_address(ip_address)
         except ValueError as ve:
             print(f"{Colors.FAIL}ERROR: MALFORMED IP ADDRRESS '{ip_address}'{Colors.ENDC}")
             return None
+        
+        #check if valid port number
+        try:
+            port = int(port)
+            if port >= 65525 or port < 0:
+                print(f"{Colors.FAIL}ERROR: INVALID PORT NUMBER '{port}'{Colors.ENDC}")
+                return None
+        except ValueError:
+            print(f"{Colors.FAIL}ERROR: PORT NUMBER WAS NOT A VALID INTEGER'{port}'{Colors.ENDC}")
+            return None
+        
+        #create a socket object
         client = socket.socket()
         try:
             #attempt connection to ip_address:port
             client.connect((ip_address, int(port)))
-        except ValueError:
-            print(f"{Colors.FAIL}ERROR: MALFORMED PORT NUMBER '{port}'{Colors.ENDC}")
-            client.close()
-            return None
-        except:
+        except Exception:
             #connection failed, print error and return 
             print(f"{Colors.FAIL}ERROR: CONNECTION TO {ip_address}:{port} FAILED{Colors.ENDC}")
             client.close()
             return None
-        #connection successful, keep track of active connection
-        if ip_address == SERVER_IP and port == PORT:
+        
+        #check if server is still running
+        # KEEP AFTER CONNECTION ESTABLISHED TO PROPERLY TERMINATE SERVER
+        if not self.running:
             client.close()
-            return True
-        self.connections.append(client)
-        return self.handshake(isClient=True, client=client, addr=(ip_address, int(port)))
+            return None
+        
+        #attempt handshake to establish secure communications
+        thread = Thread(target=self.handle_client, args=(client, (ip_address, port), True))
+        thread.start()
+        return True
     
     """
         Function Handshake
         ==================
         Allows a way to exchange pub keys and test for corruption upon connection
         client
-        sending pk -> recieve_pk -> send test message -> receive test message
+        sending pk -> recieve pk -> send test message -> receive test message
         server
-        receiving_pk -> sending pk -> receive test message -> sending test message
+        receiving pk -> sending pk -> receive test message -> sending test message
     """
     def handshake(self, isClient:bool, client:socket, addr):
         public_key = None
@@ -388,18 +404,30 @@ class Server():
             #print("S Handshake 4:")
             client.send(b"".join(self.keys.EncryptMessage(message=MSG_CONN, public_bytes=public_key)))
 
-        print(f"{Colors.OKCYAN}[SERVER] CONNECTION ESTABLISHED {addr[0]}:{addr[1]}{Colors.ENDC}")
-        #save public key into keychain
-        if not public_key is None:
-            self.keychain.update({addr:client})
+        print(f"{Colors.OKCYAN}[SERVER] CONNECTION ESTABLISHED {addr[0]}:{addr[1]}{Colors.ENDC}\n:")
+        
+        #update the metadata for the message threads and connection
+        self.keychain.update({addr:(client, public_key)})
+        self.keychain.update({addr:[]})
+        self.clients.append(addr)
         return True
 
     """
         Send Message
-
+        ============
+        Sends message to anyone who already has an established connection
+        Param: 
+            addr: destination address (ip_address, port) tuple 
+            message: the message to be sent (str)
     """
-    def send_message(self, conn:socket, addr):
-        pass
+    def send_message(self, addr:tuple, message:str) -> bool:
+        socket, pub_key = self.keychain.get(addr)
+        try:
+            socket.send(b"".join(self.keys.EncryptMessage(message, pub_key)))
+        except Exception:
+            print(f"{Colors.FAIL}ERROR: FAILED SENDING MESSAGE TO {addr[0]}:{addr[1]}{Colors.ENDC}")
+            return False
+        return True
 
     """
         Function Receive Message
@@ -428,7 +456,9 @@ class Server():
         prints out existing connections both clients and servers
     """
     def get_connections(self):
-        pass
+        print(f"Active Connections:")
+        for connections in self.clients:
+            print(f"\t{connections[0]}:{connections[1]}")
 
     """
         Function Start
@@ -444,9 +474,9 @@ class Server():
         print(f"{Colors.OKCYAN}[SERVER] LISTENING FOR NEW CONNECTIONS{Colors.ENDC}")
         while self.running:
             conn, addr = self.server.accept()
-            print(f"{Colors.OKCYAN}[SERVER] CONNECTION REQUEST {addr[0]}:{addr[1]}{Colors.ENDC}")
             if not self.running:
                 continue
+            print(f"{Colors.OKCYAN}[SERVER] CONNECTION REQUEST {addr[0]}:{addr[1]}{Colors.ENDC}")
             thread = Thread(target=self.handle_client, args=(conn,addr))
             thread.start()
             print(f"{Colors.OKCYAN}[ACTIVE CONNECTIONS] {active_count()-2}{Colors.ENDC}")
@@ -463,12 +493,14 @@ def print_menu(my_keys:RSA_Key):
     has_pub = not my_keys.public_bytes is None
     has_priv = not my_keys.private_bytes is None
     print("{0:40s}".format("Welcome to the p2p server"))
-    print("{0:40s}{2:5s}{1:20s}".format("1) Import Keys"," : Public Key Loaded",str(has_pub)))
-    print("{0:40s}{2:5s}{1:20s}".format("2) Export Keys"," : Private Key Loaded",str(has_priv)))
-    print("{0:40s}".format("3) Generate new keys"))
+    print("{0:40s}{2:5s}{1:20s}".format("1) Import Keys"," : Public Key Loaded", str(has_pub)))
+    print("{0:40s}{2:5s}{1:20s}".format("2) Export Keys"," : Private Key Loaded", str(has_priv)))
+    print("{0:40s}{1:s}:{2:d}".format("3) Generate new keys", SERVER_IP, PORT))
     print("{0:40s}".format("4) Start Session"))
-    print("{0:40s}".format("5) View Session"))
+    print("{0:40s}".format("5) View Sessions"))
     print("{0:40s}".format("6) Clear Session"))
+    print("{0:40s}".format("7) View Messages"))
+    print("{0:40s}".format("8) Send Message"))
     print("{0:40s}".format("9) Exit"))
 
 def import_keys(my_keys):
@@ -509,18 +541,61 @@ def generate_keys(my_keys:RSA_Key):
 def start_session(server:Server):
     ip = input("Please enter an IP address to connect to\n:").strip()
     port = input("Please enter the destination port to connect to\n:").strip()
-    if(server.connect_to_client(ip_address=ip, port=port)):
-        print(f"{Colors.OKGREEN}SESSION SUCCESSFULLY STARTED{Colors.ENDC}")
+    if(not server.connect_to_client(ip_address=ip, port=port)):
+        return
+    
+    print(f"{Colors.OKGREEN}SESSION SUCCESSFULLY STARTED{Colors.ENDC}")
+    name = input("If you would like to assign a contact name with this address, please enter it in\n:").strip()
+    if name:
+        validation = input(f"Are you sure you want to assign {name} to {ip}:{port}? [y/n]\n:").strip()
+        if validation != "y" or validation != "Y":
+            name = None
+    if name:
+        server.contacts.update(name, (ip,port))
 
-def view_session(server:Server):
-
-    pass
+def view_sessions(server:Server):
+    server.get_connections()
 
 def clear_session(server:Server):
     pass
 
-def send_message(server:Server):
+def view_messages(server:Server):
     pass
+
+def send_message(server:Server):
+    #get IP address or contact name of message recipient
+    view_sessions(server=server)
+    print(server.keychain.keys())
+    dest = input("Who would you like to send a message to?\n[IPv4 address or contact name]\n:").strip()
+    #store ip,port tuple for server use
+    addr = None
+    #if null entry throw error
+    if not dest:
+        print(f"{Colors.FAIL}ERROR: INVALID INPUT{Colors.ENDC}")
+        return
+    try:
+        #first search contact liest
+        if server.contacts.get(dest):
+            #if contact found, use dict to get addr value
+            addr = server.keychain.get(server.contacts.get(dest))
+        #check if entry is a valid format for IPv4 address
+        elif ipaddress.ip_address(dest):
+            #if valid IP address format ask for port
+            port = input(f"Please enter the port for '{dest}'\n:").strip()
+            #make tuple of ip and port
+            addr = (dest, int(port))
+            #check if addr is a valid addr in keychain
+            if not server.keychain.get(addr):
+                raise ValueError
+        else:
+            raise ValueError
+    except ValueError:
+        print(f"{Colors.FAIL}ERROR: MALFORMED IP ADDRRESS OR UNKNOWN CONTACT '{dest}'{Colors.ENDC}")
+        return None
+    #if valid recipient has been confirmed, ask for message
+    message = input("What message would you like to send?\n:")
+    #pass addr and message to server to be sent out
+    server.send_message(addr, message)
 
 def main():
     #import config file
@@ -553,11 +628,13 @@ def main():
                 start_session(server=server)
             case "5":
                 #view session
-                view_session(server=server)
+                view_sessions(server=server)
             case "6":
                 #clear session
                 clear_session(server=server)
             case "7":
+                pass
+            case "8":
                 send_message(server=server)
             case "9":
                 #exit
@@ -565,45 +642,19 @@ def main():
             case _:
                 print(f"{Colors.FAIL}INVALID OPTION{Colors.ENDC}")
         input("press 'ENTER' to continue")
-    """
-    print("encrypting message hello world")
-    encrypted_message = my_keys.EncryptMessage("How is your day going?")
-    with open("test.txt", "wb") as test:
-        [test.write(m) for m in encrypted_message]
-    #print(my_keys.DecryptMessage(encrypted_message))
-    with open("test.txt", "rb") as test:
-        encrypted_message = [ test.read(x) for x in (512, 16, 16, 4, -1) ]
-        decrypted_message = my_keys.DecryptMessage(encrypted_message)
-    print(decrypted_message)
-    """
+    
     #disable the server from listening to more connections
     server.running = False
     #send sudo client to server to escape accept() hang
     server.connect_to_client(SERVER_IP, PORT)
-    #sleep temporarily
-    time.sleep(0.5)
     #every server that we have connected to should get a 
     #detatch message and should be detached from
-    for connection in server.connections: 
+    for client in server.clients:
+        connection = server.keychain.get(client)[0]
         connection.sendall(MSG_DISS)
         connection.close()
     #close the server
-    server.server.close
+    server.server.close()
 
 if __name__ == "__main__":
     main()
-
-
-"""
-write bytes to stream 
--------------------
-with open("test.txt", "wb") as test:
-    [test.write(m) for m in encrypted_message]
-
-
-read bytes from stream 
---------------------
-with open("test.txt", "rb") as test:
-    encrypted_message = [ test.read(x) for x in (512, 16, 16, -1) ]
-    decrypted_message = my_keys.DecryptMessage(encrypted_message)
-"""
