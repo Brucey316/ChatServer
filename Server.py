@@ -175,7 +175,7 @@ class RSA_Key():
         except ValueError as ve:
             print(f"{Colors.FAIL}ERROR: INCORRECT PASSWORD{Colors.ENDC}")   
         except Exception as e:
-            print(f"{Colors.FAIL}ERROR: KEY NOT READ FROM FILE '{file}' {Colors.ENDC}")
+            print(f"{Colors.FAIL}ERROR: KEY NOT READ FROM FILE '{file}'{Colors.ENDC}")
         return None
     
     """
@@ -275,11 +275,11 @@ class Server():
     def __init__(self, keys:RSA_Key):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((SERVER_IP, PORT))
-        print(f"{Colors.OKCYAN}[SERVER] ESTABLISHED @ {SERVER_IP}:{PORT}{Colors.ENDC}")
+        print(f"{Colors.OKCYAN}\r[SERVER] ESTABLISHED @ {SERVER_IP}:{PORT}{Colors.ENDC}\n:", end="")
         self.keys = keys
         self.clients = []   # (ip,port)
         self.keychain = {} # (ip,port) -> (socket,public_key)
-        self.messages = {} # (ip,port) -> messages str[]
+        self.messages = {} # (ip,port) -> [ (ip,port) , messages:str ]
         self.contacts = {} # name:str -> (ip,port)
         self.running = True
     
@@ -304,14 +304,24 @@ class Server():
             message = None
             try:
                 message = self.receive_message(conn=conn)
+                #if client is disconnecting, exit gracefully
                 if message ==  MSG_DISS:
                     break
+            #Catch error on malformed packet recieve_message throws value error
             except ValueError:
                 print(f"{Colors.FAIL}ERROR: CORRUPT MESSAGE RECEIVED{Colors.ENDC}")
+            #check for error on file descriptor, helps catch error when exiting
+            except OSError:
+                if self.running:
+                    print(f"{Colors.FAIL}ERROR: FAILED WAITING FOR MESSAGE FROM {addr[0]}:{addr[1]}{Colors.ENDC}")
+            #if no message sent (usually on connection), ignore
             if message == None:
                 continue
-            print(f"{Colors.OKCYAN}[SERVER] RECEIVED MESSAGE FROM {addr[0]}{Colors.ENDC}\n:")
-            print(message)
+            print(f"{Colors.OKCYAN}\r[SERVER] RECEIVED MESSAGE FROM {addr[0]}{Colors.ENDC}\n:", end="")
+            self.messages.get(addr).append((addr,message))
+            #print(message)
+        self.clients.remove(addr)
+        print(f"{Colors.OKCYAN}\r[SERVER] CLIENT {addr[0]}:{addr[1]} HAS DISCONNECTED{Colors.ENDC}\n:", end="")
         conn.close()
 
     """
@@ -376,35 +386,27 @@ class Server():
         public_key = None
         if isClient:
             #send public key to server
-            #print("C Handshake 1:")
             client.send(self.keys.public_bytes.export_key(format='PEM', passphrase=None, pkcs=1))
             #wait for 'host' public key
-            #print("C Handshake 2:")
             public_key = RSA.import_key(client.recv(PK_LEN))
             #send test message to server
-            #print("C Handshake 3:")
             #change to send all at once to avoid data
             client.send(b"".join(self.keys.EncryptMessage(message=MSG_CONN, public_bytes=public_key)))
             #wait for 'host' test message
-            #print("C Handshake 4:")
             if not self.receive_message(conn=client) == MSG_CONN:
                 return False
         else:
             #receive the public key from client
-            #print("S Handshake 1:")
             public_key = RSA.import_key(client.recv(PK_LEN))
             #send public key to client
-            #print("S Handshake 2:")
             client.send(self.keys.public_bytes.export_key(format='PEM', passphrase=None, pkcs=1))
             #receive the test message
-            #print("S Handshake 3:")
             if not self.receive_message(conn=client) == MSG_CONN:
                 return False
             #send test message
-            #print("S Handshake 4:")
             client.send(b"".join(self.keys.EncryptMessage(message=MSG_CONN, public_bytes=public_key)))
 
-        print(f"{Colors.OKCYAN}[SERVER] CONNECTION ESTABLISHED {addr[0]}:{addr[1]}{Colors.ENDC}\n:")
+        print(f"{Colors.OKCYAN}\r[SERVER] CONNECTION ESTABLISHED {addr[0]}:{addr[1]}{Colors.ENDC}\n:", end="")
         
         #update the metadata for the message threads and connection
         self.keychain.update({addr:(client, public_key)})
@@ -452,13 +454,14 @@ class Server():
         if message == None:
             raise ValueError
         return message
+    
     """
         prints out existing connections both clients and servers
     """
     def get_connections(self) -> None:
         print(f"Active Connections:")
-        for connections in self.clients:
-            print(f"\t{connections[0]}:{connections[1]}")
+        for i,connections in enumerate(self.clients):
+            print(f"\t{i+1}) {connections[0]}:{connections[1]}")
 
     """
         Function Start
@@ -471,16 +474,16 @@ class Server():
     """
     def start(self) -> None:
         self.server.listen()
-        print(f"{Colors.OKCYAN}[SERVER] LISTENING FOR NEW CONNECTIONS{Colors.ENDC}")
+        print(f"{Colors.OKCYAN}\r[SERVER] LISTENING FOR NEW CONNECTIONS{Colors.ENDC}\n:", end="")
         while self.running:
             conn, addr = self.server.accept()
             if not self.running:
                 continue
-            print(f"{Colors.OKCYAN}[SERVER] CONNECTION REQUEST {addr[0]}:{addr[1]}{Colors.ENDC}")
+            print(f"{Colors.OKCYAN}\r[SERVER] CONNECTION REQUEST {addr[0]}:{addr[1]}{Colors.ENDC}\n:", end="")
             thread = Thread(target=self.handle_client, args=(conn,addr))
             thread.start()
-            print(f"{Colors.OKCYAN}[ACTIVE CONNECTIONS] {active_count()-2}{Colors.ENDC}")
-        print(f"{Colors.OKCYAN}[SERVER] NO LONGER LISTENING{Colors.ENDC}")
+            print(f"{Colors.OKCYAN}\r[ACTIVE CONNECTIONS] {active_count()-2}{Colors.ENDC}\n:", end="")
+        print(f"{Colors.OKCYAN}\r[SERVER] NO LONGER LISTENING{Colors.ENDC}\n:", end="")
 
 """
     Function Print Menu
@@ -536,22 +539,22 @@ def generate_keys(my_keys:RSA_Key):
         print(f"{Colors.OKGREEN}Keys have been regenerated{Colors.ENDC}")
         print(f"{Colors.WARNING}*Make sure to save keys or they will not be available next session*{Colors.ENDC}")
     else:
-        print(f"{Colors.FAIL}Regeneration has been aborted{Colors.ENDC}")
+        print(f"{Colors.WARNING}REGENERATION HAS BEEN ABORTED{Colors.ENDC}")
 
 def start_session(server:Server):
     ip = input("Please enter an IP address to connect to\n:").strip()
     port = input("Please enter the destination port to connect to\n:").strip()
     if(not server.connect_to_client(ip_address=ip, port=port)):
         return
-    
     print(f"{Colors.OKGREEN}SESSION SUCCESSFULLY STARTED{Colors.ENDC}")
+    time.sleep(0.1)
     name = input("If you would like to assign a contact name with this address, please enter it in\n:").strip()
     if name:
         validation = input(f"Are you sure you want to assign {name} to {ip}:{port}? [y/n]\n:").strip()
-        if validation != "y" or validation != "Y":
+        if validation != "y" and validation != "Y":
             name = None
     if name:
-        server.contacts.update(name, (ip,port))
+        server.contacts.update({name:(ip,int(port))})
 
 def view_sessions(server:Server):
     server.get_connections()
@@ -560,12 +563,25 @@ def clear_session(server:Server):
     pass
 
 def view_messages(server:Server):
-    pass
+    view_sessions(server=server)
+    contact = input("Which contact would you like to view?\n:")
+    try: 
+        contact = int(contact)
+    except ValueError:
+        print(f"{Colors.FAIL}PLEASE ENTER A NUMBER BETWEEN 1-{len(server.clients)}{Colors.ENDC}")
+        return None
+    if contact < 0 or contact > len(server.clients):
+        print(f"{Colors.FAIL}PLEASE ENTER A NUMBER BETWEEN 1-{len(server.clients)}{Colors.ENDC}")
+        return None
+    
+    for message in server.messages.get(server.clients[contact-1]):
+        if message[0] == (SERVER_IP,PORT):
+            print('\t',end="")
+        print(message[1])
 
 def send_message(server:Server):
     #get IP address or contact name of message recipient
     view_sessions(server=server)
-    print(server.keychain.keys())
     dest = input("Who would you like to send a message to?\n[IPv4 address or contact name]\n:").strip()
     #store ip,port tuple for server use
     addr = None
@@ -576,8 +592,9 @@ def send_message(server:Server):
     try:
         #first search contact liest
         if server.contacts.get(dest):
+            print(server.contacts.get(dest))
             #if contact found, use dict to get addr value
-            addr = server.keychain.get(server.contacts.get(dest))
+            addr = server.contacts.get(dest)
         #check if entry is a valid format for IPv4 address
         elif ipaddress.ip_address(dest):
             #if valid IP address format ask for port
@@ -595,7 +612,8 @@ def send_message(server:Server):
     #if valid recipient has been confirmed, ask for message
     message = input("What message would you like to send?\n:")
     #pass addr and message to server to be sent out
-    server.send_message(addr, message)
+    if server.send_message(addr, message):
+        server.messages.get(addr).append( ((SERVER_IP,PORT),message) )
 
 def main():
     #import config file
@@ -633,14 +651,14 @@ def main():
                 #clear session
                 clear_session(server=server)
             case "7":
-                pass
+                view_messages(server=server)
             case "8":
                 send_message(server=server)
             case "9":
                 #exit
                 break
             case _:
-                print(f"{Colors.FAIL}INVALID OPTION{Colors.ENDC}")
+                print(f"{Colors.FAIL}ERROR: INVALID OPTION{Colors.ENDC}")
         input("press 'ENTER' to continue")
     
     #disable the server from listening to more connections
